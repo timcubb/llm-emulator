@@ -14,6 +14,7 @@ import { routeToCase, runHandler } from "./router.js";
 import { applyFaultOrLatency } from "./faults.js";
 import { validatePayload } from "./contracts.js";
 import { ScenarioRunner } from "./scenario.js";
+import { findHttpMock } from "./findHttpMock.js";
 
 function findCaseOptions(config, text) {
   const c = (config.cases || []).find((cs) =>
@@ -54,7 +55,6 @@ export async function createLlmMockRouter(config) {
       config.contracts?.mode || "warn"
     );
 
-    // SCENARIO HOOK: see if there's a scripted step to play
     const step = await scenarios.nextStep();
     if (step) {
       const model = body.model || "llm-emulator";
@@ -83,11 +83,8 @@ export async function createLlmMockRouter(config) {
         );
         return res.json(payload);
       }
-
-      // if some unknown step kind sneaks in, just fall through to normal flow
     }
 
-    // Normal caseWhen-based mocking
     const text = extractUserTextFromOpenAI(body) || "";
     const model = body.model || "llm-emulator";
     const provider = "openai.chat";
@@ -140,7 +137,8 @@ export async function createLlmMockRouter(config) {
       const payload = openAIResponse({
         model,
         text:
-          config.defaults?.fallback || "Sorry, I don't have a mock for that yet.",
+          config.defaults?.fallback ||
+          "Sorry, I don't have a mock for that yet.",
       });
       validatePayload(
         "response",
@@ -166,7 +164,6 @@ export async function createLlmMockRouter(config) {
     const model = req.params.model || body.model || "models/gemini-mock";
     const provider = "gemini.generateContent";
 
-    // SCENARIO HOOK for Gemini
     const step = await scenarios.nextStep();
     if (step) {
       let text;
@@ -186,10 +183,8 @@ export async function createLlmMockRouter(config) {
         );
         return res.json(payload);
       }
-      // unknown step.kind → fall through
     }
 
-    //  Normal Gemini caseWhen-based mocking
     const text = extractUserTextFromGemini(body) || "";
 
     log("req.in", { provider, reqId: req._reqId, model, text });
@@ -239,7 +234,8 @@ export async function createLlmMockRouter(config) {
       const payload = geminiResponseShape({
         model,
         text:
-          config.defaults?.fallback || "Sorry, I don't have a mock for that yet.",
+          config.defaults?.fallback ||
+          "Sorry, I don't have a mock for that yet.",
       });
       validatePayload(
         "response",
@@ -272,7 +268,6 @@ export async function createLlmMockRouter(config) {
     const model = body.model || "llm-emulator";
     const provider = "openai.responses";
 
-    //  SCENARIO HOOK: same idea as chat / gemini
     const step = await scenarios.nextStep();
     if (step) {
       let text;
@@ -292,10 +287,8 @@ export async function createLlmMockRouter(config) {
         );
         return res.json(payload);
       }
-      // unknown step kind → fall through to normal matching
     }
 
-    //  Normal caseWhen-based behavior
     const text = extractUserTextFromResponses(body) || "";
 
     log("req.in", {
@@ -352,7 +345,8 @@ export async function createLlmMockRouter(config) {
       const payload = responsesShape({
         model,
         text:
-          config.defaults?.fallback || "Sorry, I don't have a mock for that yet.",
+          config.defaults?.fallback ||
+          "Sorry, I don't have a mock for that yet.",
       });
       validatePayload(
         "response",
@@ -392,6 +386,61 @@ export async function createLlmMockRouter(config) {
       config.contracts?.mode || "warn"
     );
     res.json(payload);
+  });
+
+  router.all("*", async (req, res) => {
+    const { httpMocks = [] } = config;
+    const provider = "http";
+
+    const match = findHttpMock(httpMocks, req);
+
+    if (!match) {
+      log("http.not_found", { method: req.method, path: req.path });
+      return res.status(404).json({
+        error: "No HTTP mock defined for this route.",
+        path: req.path,
+        method: req.method,
+      });
+    }
+
+    const { mock, params } = match;
+
+    const httpReq = {
+      method: req.method,
+      path: req.path,
+      params,
+      query: req.query,
+      headers: req.headers,
+      body: req.body,
+    };
+
+    const ctx = {
+      env: config.env,
+      testTag: config.testTag,
+      provider,
+      reqId: req._reqId,
+    };
+
+    log("http.req.in", {
+      provider,
+      reqId: ctx.reqId,
+      method: httpReq.method,
+      path: httpReq.path,
+    });
+
+    async function send() {
+      const body = await mock.handler(httpReq, ctx);
+      log("http.req.out", {
+        provider,
+        reqId: ctx.reqId,
+        method: httpReq.method,
+        path: httpReq.path,
+      });
+      return res.json(body);
+    }
+
+    const options = mock.options || findCaseOptions(config, "");
+    return applyFaultOrLatency(options, ctx, res, send);
   });
 
   return router;

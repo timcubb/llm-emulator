@@ -1,4 +1,4 @@
-import { define, caseWhen, scenario } from "../src/dsl.js";
+import { define, caseWhen, scenario, httpWhen } from "../src/dsl.js";
 
 export default define({
   server: { port: 11434, stream: false },
@@ -108,6 +108,76 @@ export default define({
         },
       ],
     }),
+  ],
+
+  httpMocks: [
+    httpWhen(
+      { method: "GET", path: "/test/endpoint/:testId" },
+      (req, ctx) => {
+        // req: normalized express-y object
+        // ctx: { env, testTag, provider: "http", reqId, ... }
+        const { testId } = req.params;
+        return {
+          id: `plan_${testId}`,
+          price_cents: 5000,
+          currency: "USD",
+          name: "Mock Starter",
+        };
+      },
+      {
+        latencyMs: { min: 20, max: 120 },
+        faults: [
+          {
+            kind: "HTTP_500",
+            when: { env: "ci", headers: { "x-test-plan": "fail" } },
+          },
+        ],
+      }
+    ),
+
+    httpWhen({ method: "POST", path: "/users" }, (req) => {
+      const { email } = req.body;
+      return {
+        id: "user_mock_123",
+        email,
+        created_at: new Date().toISOString(),
+      };
+    }),
+
+    httpWhen(
+      { method: "POST", path: "/api/experiments" },
+      async (req, ctx) => {
+        const { name, metric, callbackUrl } = req.body || {};
+
+        const id = "exp_mock_" + Date.now();
+
+        // You can do your own webhook here
+        if (callbackUrl) {
+          // fire-and-forget
+          fetch(callbackUrl, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              experimentId: id,
+              status: "created",
+              source: "llm-emulator",
+            }),
+          }).catch((err) => {
+            console.error("[httpWhen webhook] failed", err);
+          });
+        }
+
+        return {
+          id,
+          name,
+          metric,
+          status: "CREATED",
+        };
+      },
+      {
+        latencyMs: { min: 50, max: 150 },
+      }
+    ),
   ],
 
   contracts: { provider: "openai", version: "2025-06-01", mode: "warn" },

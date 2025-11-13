@@ -1,6 +1,18 @@
 # llm-emulator
 
-> Enterprise-grade **LLM API emulator** for local dev, integration tests, and CI.
+Enterprise-grade **LLM + HTTP API emulator** for local development, integration tests, CI, and multi-agent systems.
+
+`llm-emulator` provides:
+
+- Drop‑in mock for **OpenAI**, **Gemini**
+- Rich DSL for **LLM case mocks**, **matching**, and **scenarios**
+- Deterministic embeddings and semantic matching
+- **HTTP API mocks** mounted at root (`/`) for mocking downstream APIs
+- Support for **webhooks** triggered from HTTP mocks
+- Fault injection (timeouts, 500s, malformed JSON, etc.)
+- VCR-style request/response recording
+- Optional JSON-schema contract validation
+- Standalone server or Express middleware
 
 `llm-emulator` runs a local HTTP server that looks like real LLM providers
 (OpenAI-style, Gemini-style, etc.), but returns **deterministic, scripted responses**.
@@ -679,13 +691,232 @@ Then point your OpenAI / Gemini clients to:
 
 ---
 
-## 📝 Notes
+# 🔥 New: HTTP Mocking Layer
 
-- This README assumes you’ve renamed the project / binary to **`llm-emulator`**.  
-  If your actual package name / bin name is still `llm-mock` or `llm-emulator`, just
-  replace the CLI examples accordingly.
-- MiniLM semantic matching requires `@xenova/transformers` and will be lazily
-  loaded on first use. If you don’t want it, remove `"semantic-minilm"` from
-  `matching.order`.
+Using `httpWhen`, you can now mock:
+
+- Internal microservices  
+- RESTful downstream APIs  
+- Background processing triggers  
+- Anything not part of the LLM API  
+- Webhooks (inside your handler)
+
+All mounted at **root**, meaning any unmatched route (non-LLM) tries to match HTTP mocks.
 
 ---
+
+# ✨ Example — HTTP Mock
+
+```js
+import { define, httpWhen } from "../src/dsl.js";
+
+export default define({
+  server: { port: 11434 },
+  env: "local",
+
+  httpMocks: [
+    httpWhen(
+      { method: "GET", path: "/api/health" },
+      (req, ctx) => ({
+        ok: true,
+        time: new Date().toISOString(),
+        env: ctx.env,
+      })
+    ),
+  ],
+});
+```
+
+**Request:**
+
+```
+GET /api/health
+```
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "env": "local",
+  "time": "2025-03-11T12:00:00.000Z"
+}
+```
+
+---
+
+# 🧪 Path Parameters
+
+Supports Express-style params:
+
+```js
+httpMocks: [
+  httpWhen(
+    { method: "GET", path: "/users/:userId" },
+    (req) => ({
+      userId: req.params.userId,
+      status: "mock-ok"
+    })
+  )
+]
+```
+
+Request:
+
+```
+GET /users/123
+```
+
+Response:
+
+```json
+{ "userId": "123", "status": "mock-ok" }
+```
+
+---
+
+# 🪝 Webhook Example
+
+You can trigger webhooks inside HTTP mocks.
+
+```js
+httpMocks: [
+  httpWhen(
+    { method: "POST", path: "/api/exports" },
+    async (req, ctx) => {
+      const { callbackUrl } = req.body || {};
+      const exportId = "exp_mock_" + Date.now();
+
+      if (callbackUrl) {
+        setTimeout(() => {
+          fetch(callbackUrl, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              exportId,
+              status: "completed",
+              downloadUrl: "https://example.com/mock/export.csv"
+            }),
+          }).catch((err) => console.error("[webhook] failure:", err));
+        }, 1500);
+      }
+
+      return {
+        exportId,
+        status: "queued"
+      };
+    }
+  )
+]
+```
+
+Workflow:
+
+1. App calls `/api/exports` with a callback URL  
+2. Emulator returns `{ status: "queued" }`  
+3. After 1.5s, emulator sends webhook to callback URL
+
+---
+
+# 🧠 httpWhen API
+
+```ts
+httpWhen(
+  {
+    method?: string;    // GET/POST/etc. If omitted: match any
+    path: string;       // express-style: "/a/:b"
+  },
+  handler(req, ctx),
+  options?
+)
+```
+
+### `req`
+
+```ts
+{
+  method: string,
+  path: string,
+  params: Record<string,string>,
+  query: Record<string,string>,
+  headers: Record<string,string>,
+  body: any
+}
+```
+
+### `ctx`
+
+```ts
+{
+  env: string,
+  testTag?: string,
+  provider: "http",
+  reqId: string
+}
+```
+
+### `options` (same as LLM mocks)
+
+- `latencyMs`
+- `faults`
+
+Example:
+
+```js
+httpWhen(
+  { method: "GET", path: "/slow/:id" },
+  (req) => ({ id: req.params.id }),
+  {
+    latencyMs: { min: 200, max: 500 },
+  }
+);
+```
+
+---
+
+# 🔥 Combined Example: LLM + HTTP + Webhook
+
+```js
+export default define({
+  env: "local",
+  server: { port: 11434 },
+
+  // LLM mocks
+  cases: [
+    caseWhen("hello", () => "Hello!"),
+    caseWhen("what is the capital of {{state}}", (state) => "Mock City"),
+  ],
+
+  // HTTP mocks
+  httpMocks: [
+    httpWhen(
+      { method: "GET", path: "/api/status" },
+      () => ({ ok: true })
+    ),
+
+    httpWhen(
+      { method: "POST", path: "/api/export" },
+      async (req) => {
+        const id = "exp_" + Date.now();
+        const callback = req.body.callbackUrl;
+
+        if (callback) {
+          setTimeout(() => {
+            fetch(callback, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                id,
+                status: "done",
+                file: "/mock/file.csv"
+              }),
+            });
+          }, 1000);
+        }
+
+        return { id, status: "queued" };
+      }
+    )
+  ]
+});
+```

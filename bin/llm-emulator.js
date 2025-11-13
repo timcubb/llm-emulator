@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import minimist from "minimist";
-import { loadJsConfig } from "../src/load-config.js";
+import { loadJsConfig } from "../src/loadConfig.js";
 import { start } from "../src/server.js";
 import { applyEnvOverrides } from "../src/util.js";
 

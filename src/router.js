@@ -1,6 +1,6 @@
-import { bestMiniLM } from "./matcher_minilm.js";
+import { bestMiniLM } from "./matcherMinilm.js";
 import { extractVarsLoosely, compileTemplateRegex } from "./patterns.js";
-import { matchExact, scoreFuzzy, scoreNgramSemantic } from "./matcher_basic.js";
+import { matchExact, scoreFuzzy, scoreNgramSemantic } from "./matcherBasic.js";
 
 /**
  * Extract "static" tokens from a pattern (excluding {{variables}}).
