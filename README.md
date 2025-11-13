@@ -41,7 +41,7 @@ Use it to:
 - **Configurable matching engine**
   - Exact pattern
   - Template regex (`{{var}}` placeholders)
-  - MiniLM semantic similarity (optional, via `@xenova/transformers`)
+  - MiniLM semantic similarity (optional, via `@huggingface/transformers`)
   - Fuzzy string similarity
   - Cheap n-gram semantic-ish matching
 - **Scenarios**
