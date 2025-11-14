@@ -420,12 +420,14 @@ Perfect for test reproducibility and debugging.
 Mount the emulator in an existing server:
 
 ```js
-import { createEmulator } from "llm-emulator";
+import { createLlmEmulatorRouter } from "llm-emulator";
 
-const emulator = await createEmulator("./config.mjs");
+const emulator = await createLlmEmulatorRouter("./config.mjs");
 
-app.use("/mock-llm", emulator.express());
+app.use("/llm-emulator", emulator.express());
 ```
+
+Now you can point you OpenAI or Gemini application to this route.
 
 ---
 

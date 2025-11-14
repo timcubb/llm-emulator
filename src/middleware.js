@@ -36,7 +36,7 @@ function deterministicEmbedding(text, seed, dim = 1536) {
   return v.map((x) => x / n);
 }
 
-export async function createLlmMockRouter(config) {
+export async function createLlmEmulatorRouter(config) {
   const router = express.Router();
   const scenarios = new ScenarioRunner(config);
 
