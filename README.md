@@ -1,922 +1,533 @@
-# llm-emulator
 
-Enterprise-grade **LLM + HTTP API emulator** for local development, integration tests, CI, and multi-agent systems.
+# LLM Emulator
 
-`llm-emulator` provides:
+**LLM Emulator** is an enterprise-grade, deterministic, fully offline emulator for LLM providers such as OpenAI, Gemini, and Ollama.  
+It enables full-stack automated testing—CI, integration tests, E2E flows, multi-agent orchestration flows, and local development—*without hitting real LLM APIs, without API keys, and without nondeterministic model drift.*
 
-- Drop‑in mock for **OpenAI**, **Gemini**
-- Rich DSL for **LLM case mocks**, **matching**, and **scenarios**
-- Deterministic embeddings and semantic matching
-- **HTTP API mocks** mounted at root (`/`) for mocking downstream APIs
-- Support for **webhooks** triggered from HTTP mocks
-- Fault injection (timeouts, 500s, malformed JSON, etc.)
-- VCR-style request/response recording
-- Optional JSON-schema contract validation
-- Standalone server or Express middleware
+The star of the system is **Scenario Graphs**: branching, stateful, multi-step scripted interactions that emulate how your LLM-powered agents and workflows behave in production.
 
-`llm-emulator` runs a local HTTP server that looks like real LLM providers
-(OpenAI-style, Gemini-style, etc.), but returns **deterministic, scripted responses**.
+Other features include:
 
-Use it to:
-
-- Develop and run your app locally without real API keys
-- Write fast, reliable integration tests for multi-agent / tools workflows
-- Simulate happy paths, error paths, timeouts, and bad JSON
-- Run **scenarios**: multi-step conversations + tool calls, in a fixed order
+- Linear scenarios  
+- Case-based prompt → response mocking  
+- HTTP downstream API mocks (for your REST dependencies)  
+- Fault injection  
+- Delays  
+- JSON-schema contract validation  
+- VCR request recording  
+- Express middleware integration  
 
 ---
 
-## ✨ Features
+# 📌 Table of Contents
 
-- **OpenAI-compatible endpoints**
-  - `POST /v1/chat/completions`
-  - `POST /chat/completions` (alias)
-  - `POST /v1/responses`
-  - `POST /responses` (alias)
-  - `POST /v1/embeddings` (deterministic fake vectors)
-- **Gemini-compatible endpoints**
-  - `POST /v1/models/:model:generateContent`
-  - `POST /v1alpha/models/:model:generateContent`
-  - `POST /v1beta/models/:model:generateContent`
-- **Configurable matching engine**
-  - Exact pattern
-  - Template regex (`{{var}}` placeholders)
-  - MiniLM semantic similarity (optional, via `@huggingface/transformers`)
-  - Fuzzy string similarity
-  - Cheap n-gram semantic-ish matching
-- **Scenarios**
-  - Scripted multi-step flows (`chat`, `tools`, `wait`)
-  - Triggered via CLI flag (`--scenario`) or config
-- **Fault injection**
-  - Latency, timeouts
-  - HTTP 4xx / 5xx
-  - Malformed JSON
-  - Stream glitches (drop/duplicate chunks)
-- **Contract validation**
-  - Uses JSON Schemas + Ajv (optional)
-- **VCR-style recording**
-  - Record incoming requests + responses to `.jsonl` files for later inspection
-- **Express middleware**
-  - Mount `llm-emulator` into an existing Express app
+1. [Overview](#overview)  
+2. [Installation](#installation)  
+3. [Quick Start](#quick-start)  
+4. [Scenario Graphs](#scenario-graphs)  
+5. [Linear Scenarios](#linear-scenarios)  
+6. [Case-Based Prompt Mocks](#case-based-prompt-mocks)  
+7. [HTTP Mocking](#http-mocking)  
+8. [Provider Compatibility](#provider-compatibility)  
+9. [Fault Injection](#fault-injection)  
+10. [Delays](#delays)  
+11. [Contract Validation](#contract-validation)  
+12. [VCR Recording](#vcr-recording)  
+13. [Express Middleware](#express-middleware)  
+14. [CLI Reference](#cli-reference)  
+15. [Full DSL & Config Documentation](#full-dsl--config-documentation)
+16. [License](#license)  
 
 ---
 
-## 🚀 Install
+# Overview
 
-```bash
-npm install --save-dev llm-emulator
+Applications today rely on LLM outputs for:
+
+- multi-step conversations  
+- agent tool calls  
+- chain-of-thought workflows  
+- structured output generation  
+- code generation  
+- orchestration logic  
+- multi-agent routing  
+
+This makes **local testing**, **CI**, and **E2E automation** incredibly fragile unless you have:
+
+- deterministic outputs  
+- reproducible flows  
+- fast execution  
+- offline capability  
+- stateful multi-turn interactions  
+
+LLM Emulator provides all of this.
+
+---
+
+# Installation
+
+```
+npm install llm-emulator --save-dev
 ```
 
-Or with pnpm:
+Or use npx:
 
-```bash
-pnpm add -D llm-emulator
+```
+npx llm-emulator ./mocks/config.mjs
 ```
 
 ---
 
-## 🏃 Quick start
+# Quick Start
 
-1. Create a config file, e.g. `examples/config.mjs`:
-
-   ```js
-   import { define, caseWhen } from "../src/dsl.js";
-
-   export default define({
-     server: { port: 11434, stream: false },
-     env: "local",
-     matching: {
-       order: ["pattern-regex", "semantic-minilm", "pattern", "fuzzy", "semantic-ngrams"],
-       minilm: { threshold: 0.72 },
-       fuzzy: { threshold: 0.38 },
-     },
-     cases: [
-       caseWhen("what is the capital city of {{state}}", (state) => {
-         const value = (state || "").toLowerCase();
-         if (["nj", "new jersey"].includes(value)) return "Trenton";
-         if (["ny", "new york"].includes(value)) return "Albany";
-         return "Mock Capital";
-       }),
-     ],
-     defaults: {
-       fallback: "Sorry, I don't have a mock for that yet.",
-     },
-   });
-   ```
-
-2. Start the emulator:
-
-   ```bash
-   npx llm-emulator ./examples/config.mjs
-   ```
-
-3. Point your client at it.
-
-   **OpenAI SDK example:**
-
-   ```ts
-   import OpenAI from "openai";
-
-   const client = new OpenAI({
-     apiKey: "llm-emulator", // any non-empty string
-     baseURL: "http://localhost:11434/v1",
-   });
-
-   const resp = await client.chat.completions.create({
-     model: "gpt-4o",
-     messages: [
-       { role: "user", content: "what is the capital city of New Jersey" },
-     ],
-   });
-
-   console.log(resp.choices[0].message.content);
-   // → "Trenton"
-   ```
-
-   **Gemini SDK example:**
-
-   ```ts
-   import { GoogleGenerativeAI } from "@google/generative-ai";
-
-   const genAI = new GoogleGenerativeAI("llm-emulator", {
-     // key is ignored; baseUrl is what matters
-     baseUrl: "http://localhost:11434",
-   });
-
-   const model = genAI.getGenerativeModel({
-     model: "models/gemini-2.5-flash",
-   });
-
-   const resp = await model.generateContent({
-     contents: [{ role: "user", parts: [{ text: "what is the capital city of New York" }] }],
-   });
-
-   console.log(resp.response.text());
-   // → "Albany"
-   ```
-
----
-
-## 📦 DSL Overview
-
-The config and DSL live in plain JS/TS and are imported from `src/dsl.js`:
+### **config.mjs**
 
 ```js
-import { define, caseWhen, scenario } from "llm-emulator/src/dsl.js";
-```
-
-### `define(config)`
-
-Top-level wrapper. Returns the config as-is, but gives you a nice place to add type hints in TS projects.
-
-```ts
-export default define({
-  server: { port: 11434, stream: false },
-  // ...
-});
-```
-
-### `caseWhen(pattern, handler, options?)`
-
-Defines a **mock route**: when user text matches `pattern`, run `handler`.
-
-```ts
-caseWhen("what is the capital city of {{state}}", (state, ctx) => {
-  // state → "new jersey" / "nj" etc
-  // ctx   → { text, model, provider, messages, score, matchedPattern, vars }
-  return "Trenton";
-}, {
-  latencyMs: { min: 50, max: 120 },   // optional
-  faults: [
-    {
-      kind: "HTTP_429",
-      when: { env: "ci" },
-      body: { error: { message: "rate limited in CI" } },
-    },
-  ],
-});
-```
-
-**Arguments:**
-
-- `pattern: string`  
-  A natural language pattern with optional `{{variables}}`.
-
-  Examples:
-
-  - `"what is the capital city of {{state}}"`
-  - `"explain {{topic}} simply"`
-  - `"summarize the events I have planned this weekend."`
-
-- `handler: (varOrCtx, ctx?) => string | Promise<string>`  
-  - If the pattern has **exactly one `{{var}}`**, you get:
-    - `handler(varValue, ctx)`
-  - If it has 0 or >1 vars, you get:
-    - `handler(ctx)`
-
-  Where `ctx` has:
-
-  ```ts
-  interface HandlerContext {
-    text: string;          // extracted user text
-    model: string;         // requested model name
-    provider: string;      // e.g. "openai.chat", "gemini.generateContent", "openai.responses"
-    messages?: any[];      // OpenAI-style messages (if applicable)
-    vars: Record<string, string>;  // extracted {{var}} -> value
-    score?: number;        // similarity score from matcher
-    matchedPattern?: string;
-  }
-  ```
-
-- `options?: { latencyMs?, faults? }`  
-  Extra per-case behavior, used by the fault/latency layer:
-
-  ```ts
-  interface CaseOptions {
-    latencyMs?: number | { min: number; max: number };
-    faults?: FaultDefinition[];
-  }
-
-  interface FaultDefinition {
-    kind:
-      | "TIMEOUT"
-      | "HTTP_400" | "HTTP_401" | "HTTP_403" | "HTTP_404"
-      | "HTTP_409" | "HTTP_422" | "HTTP_500" | "HTTP_502" | "HTTP_503"
-      | "HTTP_429"
-      | "MALFORMED_JSON"
-      | "STREAM_DROP_AFTER"
-      | "STREAM_DUPLICATE_CHUNK";
-
-    when?: {
-      env?: string;                // matches cfg.env
-      testTag?: string;            // matches cfg.testTag
-      provider?: string;           // "openai.chat", "gemini.generateContent", etc
-      model?: string;              // model name
-      stream?: boolean;            // only in streaming mode / non-streaming mode
-      headers?: Record<string,string>; // match on request headers
-      params?: Record<string,string>;  // match on query params
-    };
-
-    body?: any;         // optional HTTP response body override for HTTP_* faults
-    afterChunks?: number; // used for stream faults like STREAM_DROP_AFTER, STREAM_DUPLICATE_CHUNK
-  }
-  ```
-
----
-
-### `scenario(id, spec)`
-
-Defines a **scripted multi-step flow** that overrides normal `caseWhen` matching
-while it is active.
-
-```ts
-scenario("shopping-happy-path", {
-  seed: 1337,       // optional, for deterministic randomness if you use it
-  steps: [
-    { kind: "chat", user: "priming", reply: "You are a shopping assistant." },
-    {
-      kind: "chat",
-      user: "find me a red jacket under $100",
-      reply: "I found 3 jackets under $100. Which size?",
-    },
-    {
-      kind: "tools",
-      call: { name: "search_catalog", arguments: { color: "red", max_price: 100 } },
-      result: [{ sku: "RJ-001", price: 89.99 }],
-    },
-    {
-      kind: "chat",
-      user: "buy the medium one",
-      error: { code: 502, body: { error: "gateway_unavailable" } },
-    },
-    {
-      kind: "chat",
-      user: "retry purchase",
-      reply: "Order placed. Confirmation #MOCK123.",
-    },
-  ],
-});
-```
-
-#### Scenario spec
-
-```ts
-interface ScenarioSpec {
-  seed?: number;
-  steps: ScenarioStep[];
-}
-
-type ScenarioStep =
-  | ChatStep
-  | ToolStep
-  | WaitStep;
-
-interface ChatStep {
-  kind: "chat";
-  user?: string;                // optional, for docs/logging only
-  reply?: string;               // if present, normal success reply
-  error?: { code: number; body: any }; // if present, send this HTTP error instead
-}
-
-interface ToolStep {
-  kind: "tools";
-  call: { name: string; arguments?: any }; // what tool would have been called
-  result: any;                             // what to return as the "tool result"
-}
-
-interface WaitStep {
-  kind: "wait";
-  ms: number;                  // sleep duration before advancing
-}
-```
-
-At runtime, `llm-emulator`:
-
-- Keeps global scenario state (scenario id + step index).
-- For each request (OpenAI chat, OpenAI responses, Gemini generateContent):
-  1. Checks if a scenario is active
-  2. If yes, returns the next step as:
-     - `chat` → a normal provider-shaped chat response (`openAIResponse`/`geminiResponseShape`)
-     - `tools` → a “tool result” encoded as text (for now; can be extended)
-     - `wait` → internal; consumes the step and waits before continuing
-  3. If no step remains, falls back to normal `caseWhen` routing.
-
-You enable a scenario via CLI:
-
-```bash
-npx llm-emulator ./examples/config.mjs --scenario shopping-happy-path
-```
-
-or via config:
-
-```ts
-export default define({
-  // ...
-  useScenario: "shopping-happy-path",
-  scenarios: [
-    scenario("shopping-happy-path", { /* ... */ }),
-  ],
-});
-```
-
----
-
-## 🧩 Full config reference
-
-A config file is any JS/TS module exporting a `define(...)` call:
-
-```ts
-import { define, caseWhen, scenario } from "llm-emulator/src/dsl.js";
-
-export default define({
-  server: { /* ... */ },
-  env: "local",
-  seed: 42,
-  matching: { /* ... */ },
-  cases: [ /* caseWhen(...) */ ],
-  scenarios: [ /* scenario(...) */ ],
-  contracts: { /* ... */ },
-  limits: { /* reserved */ },
-  vcr: { /* record / replay */ },
-  defaults: { /* fallback behavior */ },
-  testTag: "dev",            // optional
-  useScenario: "shopping-happy-path", // optional
-});
-```
-
-### `server`
-
-```ts
-server: {
-  port?: number;     // default: 11434
-  stream?: boolean;  // default: false (future streaming behavior)
-}
-```
-
-### `env`
-
-```ts
-env?: string; // default: "local"
-```
-
-Used by fault conditions (`when.env`) and for logging.
-
-### `seed`
-
-```ts
-seed?: number; // default: 42
-```
-
-Used for deterministic embeddings and any other seeded behavior.
-
-### `matching`
-
-```ts
-matching?: {
-  order?: string[]; // default: ["pattern-regex","semantic-minilm","pattern","fuzzy","semantic-ngrams"]
-  minilm?: { threshold?: number }; // default: { threshold: 0.72 }
-  fuzzy?:  { threshold?: number }; // default: { threshold: 0.38 }
-  ngrams?: { threshold?: number }; // default: { threshold: 0.3 } (if omitted)
-}
-```
-
-- `order` controls which matchers run, and in what sequence.
-- `minilm.threshold`: minimum cosine similarity for MiniLM matches.
-- `fuzzy.threshold`: minimum score for fuzzy string similarity.
-- `ngrams.threshold`: minimum score for the cheap n-gram semantic-ish matcher.
-
-### `cases`
-
-```ts
-cases?: ReturnType<typeof caseWhen>[];
-```
-
-Each `caseWhen(pattern, handler, options)` describes:
-
-- What user text looks like
-- How to respond
-- Optional latency and faults
-
-See the **DSL** section above.
-
-### `scenarios`
-
-```ts
-scenarios?: ReturnType<typeof scenario>[];
-```
-
-Scenario definitions, as described in the **Scenarios** section.
-You activate one via `useScenario` or `--scenario` CLI flag.
-
-### `contracts`
-
-```ts
-contracts?: {
-  provider?: "openai" | "gemini" | string;  // for your own reference
-  version?: string;                         // e.g. "2025-06-01"
-  mode?: "warn" | "strict" | "off";         // default: "warn"
-};
-```
-
-Behavior:
-
-- If a matching JSON Schema exists in `./schemas/<name>.json`, `llm-emulator`
-  validates requests/responses at runtime:
-  - `name` is things like:
-    - `"openai.chat.completions.request"`
-    - `"openai.chat.completions.response"`
-    - `"gemini.generateContent.request"`
-    - `"gemini.generateContent.response"`
-- When `mode: "warn"` (default):
-  - logs schema violations but doesn’t throw
-- When `mode: "strict"`:
-  - throws on violations and fails the request
-
-If a schema file is missing, validation is skipped for that shape.
-
-### `limits`
-
-Reserved for future rate-limiting. Currently initialized as:
-
-```ts
-limits?: {
-  tokensPerMinute?: number;      // default: 120000
-  requestsPerMinute?: number;    // default: 1000
-};
-```
-
-You can set these for documentation, but they are not yet enforced.
-
-### `vcr`
-
-```ts
-vcr?: {
-  enabled?: boolean;       // default: false
-  mode?: "record" | "replay"; // current main mode is "record"
-  cassetteDir?: string;    // default: "./.cassettes"
-  redact?: string[];       // header keys to redact (e.g. ["Authorization","api_key"])
-};
-```
-
-When `enabled: true` and `mode: "record"`, requests + responses are appended to
-`cassetteDir/<endpoint>.jsonl` as JSON lines:
-
-```json
-{"endpoint":"/v1/chat/completions","request":{...},"response":{...}, ...}
-```
-
-Useful for capturing traffic to replay or inspect later.
-
-### `defaults`
-
-```ts
-defaults?: {
-  fallback?: string; // default: "Sorry, I don't have a mock for that yet."
-}
-```
-
-If no `caseWhen` matches and no scenario is active, the emulator returns a
-provider-shaped response with `fallback` as the assistant text.
-
-### `testTag`
-
-```ts
-testTag?: string;
-```
-
-Free-form string used in fault conditions (`when.testTag`) to distinguish
-different test runs, test suites, etc.
-
-### `useScenario`
-
-```ts
-useScenario?: string; // scenario id, must match one defined via scenario(...)
-```
-
-If set, that scenario is used for all incoming requests until its steps are
-exhausted. Equivalent to running:
-
-```bash
-npx llm-emulator ./config.mjs --scenario <id>
-```
-
----
-
-## 🧪 Simple scenario example
-
-A single-step “always say hi” scenario:
-
-```ts
-import { define, caseWhen, scenario } from "llm-emulator/src/dsl.js";
+import { define, scenario, caseWhen, httpGet } from "llm-emulator";
 
 export default define({
   server: { port: 11434 },
-  env: "local",
-  cases: [
-    caseWhen("what is your name", () => "I am mock-bot."),
-  ],
+
+  useScenario: "checkout-graph",
+
   scenarios: [
-    scenario("say-hi-once", {
-      steps: [
-        {
-          kind: "chat",
-          user: "anything",
-          reply: "Hi from scenario!",
+    scenario("checkout-graph", {
+      start: "collect-name",
+      steps: {
+        "collect-name": {
+          branches: [
+            {
+              when: "my name is {{name}}",
+              if: ({ name }) => name.toLowerCase().includes("declined"),
+              reply: "Your application is declined.",
+              next: "end-declined",
+            },
+            {
+              when: "my name is {{name}}",
+              if: ({ name }) => name.toLowerCase().includes("approved"),
+              reply: "Your application is approved!",
+              next: "end-approved",
+            },
+            {
+              when: "my name is {{name}}",
+              reply: ({ vars }) =>
+                `Thanks ${vars.name}, what's your address?`,
+              next: "collect-address",
+            },
+          ],
         },
-      ],
+
+        "collect-address": {
+          branches: [
+            {
+              when: "my address is {{address}}",
+              reply: ({ vars }) =>
+                `We will contact you at ${vars.address}.`,
+              next: "end-pending",
+            },
+          ],
+        },
+
+        "end-declined": { final: true },
+        "end-approved": { final: true },
+        "end-pending": { final: true },
+      },
     }),
   ],
-});
-```
 
-Run:
-
-```bash
-npx llm-emulator ./config.mjs --scenario say-hi-once
-```
-
-- First request: `"hello?"` → `"Hi from scenario!"`  
-- Second request: `"hello?"` → normal `caseWhen` fallback or default fallback.
-
----
-
-## 🧪 Advanced scenario example: multi-agent experiment setup
-
-Imagine you have an app that:
-
-1. Asks the LLM to **create an experiment**
-2. The LLM asks the user questions
-3. The LLM calls a `create_experiment` tool
-4. Returns a success message
-
-You can emulate that with:
-
-```ts
-import { define, caseWhen, scenario } from "llm-emulator/src/dsl.js";
-
-export default define({
-  server: { port: 11434 },
-  env: "local",
   cases: [
-    caseWhen("create an experiment", () =>
-      "In real mode this would create an experiment, but in mock mode there's no scenario."
+    caseWhen("explain {{topic}} simply", ({ topic }) =>
+      `Simple explanation of ${topic}.`
     ),
   ],
 
-  scenarios: [
-    scenario("create-experiment-happy-path", {
-      seed: 999,
-      steps: [
-        {
-          kind: "chat",
-          user: "create an experiment",
-          reply: "Sure, let's set up an experiment. What should we call it?",
-        },
-        {
-          kind: "chat",
-          user: "my landing page test",
-          reply: "Got it. What's the primary metric you care about?",
-        },
-        {
-          kind: "chat",
-          user: "signup conversion",
-          reply: "Great. Which user segment are we targeting?",
-        },
-        {
-          kind: "tools",
-          call: {
-            name: "create_experiment",
-            arguments: {
-              name: "my landing page test",
-              metric: "signup_conversion",
-              segment: "all_visitors",
-            },
-          },
-          result: {
-            id: "exp_mock_123",
-            status: "CREATED",
-          },
-        },
-        {
-          kind: "chat",
-          user: "thanks",
-          reply: "All set! I created experiment exp_mock_123 in mock mode.",
-        },
-      ],
-    }),
+  httpMocks: [
+    httpGet("/api/user/:id", ({ params }) => ({
+      id: params.id,
+      name: "Mock User",
+    })),
   ],
 
   defaults: {
-    fallback: "Sorry, no mock for that yet.",
+    fallback: "No mock available.",
   },
 });
 ```
 
-Run:
+Run it:
 
-```bash
-npx llm-emulator ./config.mjs --scenario create-experiment-happy-path
+```
+npx llm-emulator ./config.mjs --scenario checkout-graph
 ```
 
-Then run your real app (pointed at `http://localhost:11434`) and walk through
-the flow; you’ll see exactly the scripted interaction every time.
-
 ---
 
-## 🔌 Express middleware usage
+# Scenario Graphs
 
-If you already have an Express server and want to mount the emulator under a path:
+Scenario Graphs are the primary way to emulate multi-step LLM-driven workflows.
 
-```ts
-import express from "express";
-import { createLlmMockRouter } from "llm-emulator/src/middleware.js";
-import config from "./config.mjs";
+A scenario consists of:
 
-const app = express();
-const router = await createLlmMockRouter(config);
+- `start`: the initial state ID
+- `steps`: a mapping of state IDs to state definitions
+- each state contains one or more **branches**
+- each branch defines:
+  - a pattern (`when`)
+  - optional guard (`if`)
+  - reply (`reply`)
+  - next state (`next`)
+  - optional delay (`delayMs`)
+  - optional tool result (`result`)
+  - optional type (`kind`: `"chat"` or `"tools"`)
 
-app.use("/llm-emulator", router);
-
-app.listen(3000, () => {
-  console.log("App listening on http://localhost:3000");
-  console.log("LLM emulator at http://localhost:3000/llm-emulator");
-});
-```
-
-Then point your OpenAI / Gemini clients to:
-
-- `http://localhost:3000/llm-emulator/v1/chat/completions`
-- `http://localhost:3000/llm-emulator/v1/models/:model:generateContent`
-- etc.
-
----
-
-# 🔥 New: HTTP Mocking Layer
-
-Using `httpWhen`, you can now mock:
-
-- Internal microservices  
-- RESTful downstream APIs  
-- Background processing triggers  
-- Anything not part of the LLM API  
-- Webhooks (inside your handler)
-
-All mounted at **root**, meaning any unmatched route (non-LLM) tries to match HTTP mocks.
-
----
-
-# ✨ Example — HTTP Mock
+### Example
 
 ```js
-import { define, httpWhen } from "../src/dsl.js";
+scenario("checkout-graph", {
+  start: "collect-name",
+  steps: {
+    "collect-name": {
+      branches: [
+        {
+          when: "my name is {{name}}",
+          if: ({ name }) => name.toLowerCase().includes("declined"),
+          reply: "Declined.",
+          next: "end-declined",
+        },
+        {
+          when: "my name is {{name}}",
+          if: ({ name }) => name.toLowerCase().includes("approved"),
+          reply: "Approved!",
+          next: "end-approved",
+        },
+        {
+          when: "my name is {{name}}",
+          reply: ({ vars }) => `Hello ${vars.name}. Your address?`,
+          next: "collect-address",
+        },
+      ],
+    },
 
-export default define({
-  server: { port: 11434 },
-  env: "local",
+    "collect-address": {
+      branches: [
+        {
+          when: "my address is {{address}}",
+          reply: ({ vars }) =>
+            `Thanks. We'll mail you at ${vars.address}.`,
+          next: "end-pending",
+        },
+      ],
+    },
 
-  httpMocks: [
-    httpWhen(
-      { method: "GET", path: "/api/health" },
-      (req, ctx) => ({
-        ok: true,
-        time: new Date().toISOString(),
-        env: ctx.env,
-      })
-    ),
-  ],
-});
-```
-
-**Request:**
-
-```
-GET /api/health
-```
-
-**Response:**
-
-```json
-{
-  "ok": true,
-  "env": "local",
-  "time": "2025-03-11T12:00:00.000Z"
-}
-```
-
----
-
-# 🧪 Path Parameters
-
-Supports Express-style params:
-
-```js
-httpMocks: [
-  httpWhen(
-    { method: "GET", path: "/users/:userId" },
-    (req) => ({
-      userId: req.params.userId,
-      status: "mock-ok"
-    })
-  )
-]
-```
-
-Request:
-
-```
-GET /users/123
-```
-
-Response:
-
-```json
-{ "userId": "123", "status": "mock-ok" }
-```
-
----
-
-# 🪝 Webhook Example
-
-You can trigger webhooks inside HTTP mocks.
-
-```js
-httpMocks: [
-  httpWhen(
-    { method: "POST", path: "/api/exports" },
-    async (req, ctx) => {
-      const { callbackUrl } = req.body || {};
-      const exportId = "exp_mock_" + Date.now();
-
-      if (callbackUrl) {
-        setTimeout(() => {
-          fetch(callbackUrl, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              exportId,
-              status: "completed",
-              downloadUrl: "https://example.com/mock/export.csv"
-            }),
-          }).catch((err) => console.error("[webhook] failure:", err));
-        }, 1500);
-      }
-
-      return {
-        exportId,
-        status: "queued"
-      };
-    }
-  )
-]
-```
-
-Workflow:
-
-1. App calls `/api/exports` with a callback URL  
-2. Emulator returns `{ status: "queued" }`  
-3. After 1.5s, emulator sends webhook to callback URL
-
----
-
-# 🧠 httpWhen API
-
-```ts
-httpWhen(
-  {
-    method?: string;    // GET/POST/etc. If omitted: match any
-    path: string;       // express-style: "/a/:b"
+    "end-declined": { final: true },
+    "end-approved": { final: true },
+    "end-pending": { final: true },
   },
-  handler(req, ctx),
-  options?
-)
+});
 ```
 
-### `req`
+### What Scenario Graphs Support
 
-```ts
-{
-  method: string,
-  path: string,
-  params: Record<string,string>,
-  query: Record<string,string>,
-  headers: Record<string,string>,
-  body: any
-}
-```
-
-### `ctx`
-
-```ts
-{
-  env: string,
-  testTag?: string,
-  provider: "http",
-  reqId: string
-}
-```
-
-### `options` (same as LLM mocks)
-
-- `latencyMs`
-- `faults`
-
-Example:
-
-```js
-httpWhen(
-  { method: "GET", path: "/slow/:id" },
-  (req) => ({ id: req.params.id }),
-  {
-    latencyMs: { min: 200, max: 500 },
-  }
-);
-```
+- Multi-turn conversation emulation  
+- Conditional routing  
+- Stateful flows  
+- Dynamic replies  
+- Tool-style responses  
+- Terminal states  
+- Deterministic behavior  
 
 ---
 
-# 🔥 Combined Example: LLM + HTTP + Webhook
+# Linear Scenarios
+
+For simple ordered scripts:
 
 ```js
-export default define({
-  env: "local",
-  server: { port: 11434 },
-
-  // LLM mocks
-  cases: [
-    caseWhen("hello", () => "Hello!"),
-    caseWhen("what is the capital of {{state}}", (state) => "Mock City"),
-  ],
-
-  // HTTP mocks
-  httpMocks: [
-    httpWhen(
-      { method: "GET", path: "/api/status" },
-      () => ({ ok: true })
-    ),
-
-    httpWhen(
-      { method: "POST", path: "/api/export" },
-      async (req) => {
-        const id = "exp_" + Date.now();
-        const callback = req.body.callbackUrl;
-
-        if (callback) {
-          setTimeout(() => {
-            fetch(callback, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                id,
-                status: "done",
-                file: "/mock/file.csv"
-              }),
-            });
-          }, 1000);
-        }
-
-        return { id, status: "queued" };
-      }
-    )
+scenario("simple-linear", {
+  steps: [
+    { kind: "chat", reply: "Welcome" },
+    { kind: "chat", reply: "Next" }
   ]
 });
 ```
+
+These run top-to-bottom.
+
+---
+
+# Case-Based Prompt Mocks
+
+Direct LLM prompt → response mocking:
+
+```js
+caseWhen("summarize {{topic}}", ({ topic }) =>
+  `Summary of ${topic}`
+);
+```
+
+Pattern matching supports:
+
+- Template variables `{{var}}`  
+- Looser lexical matching  
+- Optional fuzzy matching fallback  
+
+---
+
+# HTTP Mocking
+
+Mock downstream REST calls:
+
+```js
+httpGet("/api/user/:id", ({ params }) => ({
+  id: params.id,
+  name: "Mock User",
+}));
+
+httpPost("/api/checkout", ({ body }) => ({
+  status: "ok",
+  orderId: "mock123",
+}));
+```
+
+Works with:
+
+- GET
+- POST
+- PUT
+- DELETE
+- Path params (`:id`)
+- Query params
+- JSON body parsing
+
+---
+
+# Provider Compatibility
+
+LLM Emulator exposes mock endpoints identical to real providers.
+
+## OpenAI-Compatible
+
+```
+POST /v1/chat/completions
+POST /chat/completions
+POST /v1/responses
+POST /responses
+POST /v1/embeddings
+```
+
+Embeddings return deterministic fake vectors.
+
+## Gemini-Compatible
+
+```
+POST /v1/models/:model:generateContent
+POST /v1alpha/models/:model:generateContent
+POST /v1beta/models/:model:generateContent
+```
+
+## Ollama-Compatible
+
+```
+POST /api/generate
+```
+
+---
+
+# Fault Injection
+
+Faults can be attached to any:
+
+- branch  
+- case  
+- HTTP mock  
+
+Examples:
+
+```js
+fault: { type: "timeout" }
+fault: { type: "http", status: 503 }
+fault: { type: "malformed-json" }
+fault: { type: "stream-glitch" }
+```
+
+---
+
+# Delays
+
+Simulate real-world latency.
+
+### Global:
+
+```
+server: { delayMs: 200 }
+```
+
+### Per-scenario-state:
+
+```
+delayMs: 500
+```
+
+### Per-HTTP-route:
+
+```
+httpGet("/x", { delayMs: 300 })
+```
+
+---
+
+# Contract Validation
+
+Optional JSON-schema validation using **Ajv**.
+
+Modes:
+
+```
+contracts: {
+  mode: "strict" | "warn" | "off"
+}
+```
+
+Validates:
+
+- OpenAI request/response  
+- Gemini request/response  
+- Ollama request/response  
+
+---
+
+# VCR Recording
+
+Capture all incoming requests:
+
+```
+npx llm-emulator ./config.mjs --record ./recordings
+```
+
+Produces `.jsonl` files containing:
+
+- timestamp
+- provider
+- request JSON
+- response JSON
+
+Perfect for test reproducibility and debugging.
+
+---
+
+# Express Middleware
+
+Mount the emulator in an existing server:
+
+```js
+import { createEmulator } from "llm-emulator";
+
+const emulator = await createEmulator("./config.mjs");
+
+app.use("/mock-llm", emulator.express());
+```
+
+---
+
+# CLI Reference
+
+```
+npx llm-emulator ./config.mjs [options]
+
+--scenario <id>
+--record <dir>
+--port <num>
+--verbose
+```
+
+---
+
+# Full DSL & Config Documentation
+
+## Top-Level `define(config)`
+
+| Field | Description |
+|-------|-------------|
+| `server.port` | Port to run mock provider |
+| `server.delayMs` | Global delay |
+| `useScenario` | Active scenario ID |
+| `scenarios[]` | Scenario definitions |
+| `cases[]` | Case mocks |
+| `httpMocks[]` | HTTP mocks |
+| `defaults.fallback` | Default response text |
+
+---
+
+## Scenario Graph DSL
+
+```
+scenario(id, {
+  start: "state",
+  steps: {
+    "state": {
+      branches: [ ... ]
+    },
+    "end": { final: true }
+  }
+})
+```
+
+### Branch Fields
+
+| Field | Description |
+|-------|-------------|
+| `when` | Pattern with template vars |
+| `if(vars, ctx)` | Optional guard |
+| `reply` | String or function |
+| `kind` | `"chat"` or `"tools"` |
+| `result` | For tool-style replies |
+| `next` | Next state ID |
+| `delayMs` | Per-branch delay |
+| `fault` | Fault injection config |
+
+---
+
+## Linear Scenario DSL
+
+```
+scenario(id, {
+  steps: [
+    { kind, reply, result, delayMs, fault }
+  ]
+})
+```
+
+---
+
+## Case DSL
+
+```
+caseWhen(pattern, handler)
+```
+
+---
+
+## HTTP Mocks
+
+```
+httpGet(path, handler)
+httpPost(path, handler)
+httpPut(path, handler)
+httpDelete(path, handler)
+```
+
+Handler receives:
+
+```
+{ params, query, body, headers }
+```
+
+Supports per-route:
+
+- delays  
+- faults  
+- dynamic replies  
+
+# License
+
+MIT

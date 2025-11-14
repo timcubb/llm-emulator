@@ -1,6 +1,6 @@
 {
   "name": "llm-emulator",
-  "version": "0.4.4",
+  "version": "0.5.0",
   "description": "Enterprise-grade LLM mock server for local and CI: scenarios, faults, latency, contracts, VCR. Supports standalone server and Express middleware.",
   "type": "module",
   "bin": {
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "start": "node ./bin/llm-emulator.js ./examples/config.mjs",
-    "dev": "node ./bin/llm-emulator.js ./examples/config.mjs --env local --scenario checkout",
+    "dev": "node ./bin/llm-emulator.js ./examples/config.mjs --env local --scenario checkout-graph",
     "test": "node --test --experimental-test-coverage"
   },
   "keywords": [
@@ -38,7 +38,6 @@
     "node": ">=18.17"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.7.6",
     "ajv": "^8.17.1",
     "cors": "^2.8.5",
     "express": "^4.19.2",

@@ -1,18 +1,14 @@
 import { define, caseWhen, scenario, httpWhen } from "../src/dsl.js";
 
 export default define({
-  server: { port: 11434, stream: false },
+  server: {
+    port: 11434,
+    stream: false
+  },
   env: "local",
   seed: 42,
   matching: {
-    order: [
-      "pattern-regex",
-      "semantic-minilm",
-      "pattern",
-      "fuzzy",
-      "semantic-ngrams",
-    ],
-    minilm: { threshold: 0.72 },
+    order: ["pattern-regex", "pattern", "fuzzy"],
     fuzzy: { threshold: 0.38 },
   },
   cases: [
@@ -70,12 +66,55 @@ export default define({
         faults: [{ kind: "HTTP_500", ratio: 0.0, when: { env: "chaos" } }],
       }
     ),
-
-    caseWhen("generate code", () => "print 'test';", { id: "gen-code" }),
   ],
-
   scenarios: [
-    scenario("checkout", {
+    scenario("checkout-graph", {
+      start: "collect-name",
+      steps: {
+        "collect-name": {
+          branches: [
+            {
+              when: "my name is {{name}}",
+              if: ({ names }) =>
+                (names || "").toLowerCase().includes("declined"),
+              kind: "chat",
+              reply: "I'm sorry, your application has been declined (mock).",
+              next: "end-declined",
+            },
+            {
+              when: "my name is {{name}}",
+              if: ({ names }) =>
+                (names || "").toLowerCase().includes("approved"),
+              kind: "chat",
+              reply: "Great news, your application is approved (mock)!",
+              next: "end-approved",
+            },
+            {
+              when: "my name is {{name}}",
+              kind: "chat",
+              reply: ({ vars: { name } }) =>
+                `Thanks ${name}, let's continue your application, what is your address?`,
+              next: "collect-address",
+            },
+          ],
+        },
+
+        "collect-address": {
+          branches: [
+            {
+              when: "my address is {{address}}",
+              kind: "chat",
+              reply: ({ vars: { address }}) => `Got it. Your application review is in progress, we will send a written response to ${address}`,
+              next: "end-pending",
+            },
+          ],
+        },
+        "end-declined": { final: true },
+        "end-approved": { final: true },
+        "end-pending": { final: true },
+      },
+    }),
+    scenario("checkout-linear", {
       seed: 1337,
       steps: [
         {
@@ -151,9 +190,8 @@ export default define({
 
         const id = "exp_mock_" + Date.now();
 
-        // You can do your own webhook here
+        // example to handle webhook
         if (callbackUrl) {
-          // fire-and-forget
           fetch(callbackUrl, {
             method: "POST",
             headers: { "content-type": "application/json" },

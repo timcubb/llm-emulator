@@ -9,12 +9,9 @@ export async function loadJsConfig(path) {
   config.matching ||= {};
   config.matching.order ||= [
     "pattern-regex",
-    "semantic-minilm",
     "pattern",
     "fuzzy",
-    "semantic-ngrams",
   ];
-  config.matching.minilm ||= { threshold: 0.72 };
   config.matching.fuzzy ||= { threshold: 0.38 };
   config.cases ||= [];
   config.scenarios ||= [];

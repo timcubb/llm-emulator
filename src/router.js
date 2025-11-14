@@ -1,4 +1,3 @@
-import { bestMiniLM } from "./matcherMinilm.js";
 import { extractVarsLoosely, compileTemplateRegex } from "./patterns.js";
 import { matchExact, scoreFuzzy, scoreNgramSemantic } from "./matcherBasic.js";
 
@@ -75,21 +74,6 @@ export async function routeToCase({ text, config }) {
           pattern: caseDef.pattern,
         };
       }
-    }
-  }
-
-  // 3) MiniLM semantic matching (expensive but powerful)
-  if (order.includes("semantic-minilm")) {
-    const { best } = await bestMiniLM(normalizedText, cases);
-    if (best) {
-      const bestVars = extractVarsLoosely(normalizedText, best.case.pattern);
-      return {
-        chosen: best.case,
-        mode: "semantic-minilm",
-        score: best.score,
-        vars: bestVars,
-        pattern: best.case.pattern,
-      };
     }
   }
 

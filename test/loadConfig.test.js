@@ -32,7 +32,6 @@ test("loadJsConfig applies defaults and preserves explicit fields", async () => 
   assert.equal(cfg.server.port, 9999);
   assert.equal(cfg.server.stream, false);
   assert.deepEqual(cfg.matching.order, ["pattern"]);
-  assert.ok(cfg.matching.minilm);
   assert.ok(cfg.matching.fuzzy);
   assert.ok(Array.isArray(cfg.cases));
   assert.ok(Array.isArray(cfg.scenarios));

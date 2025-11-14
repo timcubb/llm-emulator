@@ -45,100 +45,34 @@ export async function createLlmMockRouter(config) {
   router.use(withReqId);
 
   router.get("/health", (req, res) => res.json({ ok: true, env: config.env }));
+const openAIHandler = async (req, res) => {
+  const body = req.body || {};
+  validatePayload(
+    "request",
+    "openai.chat.completions.request",
+    body,
+    config.contracts?.mode || "warn"
+  );
 
-  const openAIHandler = async (req, res) => {
-    const body = req.body || {};
-    validatePayload(
-      "request",
-      "openai.chat.completions.request",
-      body,
-      config.contracts?.mode || "warn"
-    );
+  // Extract user text/model/provider *before* scenarios
+  const text = extractUserTextFromOpenAI(body) || "";
+  const model = body.model || "llm-mock";
+  const provider = "openai.chat";
 
-    const step = await scenarios.nextStep();
-    if (step) {
-      const model = body.model || "llm-emulator";
-      if (step.kind === "chat") {
-        const payload = openAIResponse({
-          model,
-          text: step.reply || "OK",
-        });
-        validatePayload(
-          "response",
-          "openai.chat.completions.response",
-          payload,
-          config.contracts?.mode || "warn"
-        );
-        return res.json(payload);
-      }
+  // SCENARIO HOOK: see if there's a scripted step to play
+  const step = await scenarios.nextStep({
+    provider,
+    model,
+    text,
+    headers: req.headers,
+    params: req.query,
+  });
 
-      if (step.kind === "tools") {
-        const text = JSON.stringify(step.result);
-        const payload = openAIResponse({ model, text });
-        validatePayload(
-          "response",
-          "openai.chat.completions.response",
-          payload,
-          config.contracts?.mode || "warn"
-        );
-        return res.json(payload);
-      }
-    }
-
-    const text = extractUserTextFromOpenAI(body) || "";
-    const model = body.model || "llm-emulator";
-    const provider = "openai.chat";
-
-    log("req.in", { provider, reqId: req._reqId, model, text });
-
-    const ctx = {
-      env: config.env,
-      testTag: config.testTag,
-      provider,
-      model,
-      headers: req.headers,
-      params: req.query,
-      stream: !!body.stream,
-    };
-
-    async function send() {
-      const match = await routeToCase({ text, config });
-      if (match.chosen) {
-        log("match", {
-          provider,
-          mode: match.mode,
-          pattern: match.pattern,
-          score: match.score,
-          vars: match.vars,
-        });
-
-        const out = await runHandler(match.chosen, {
-          text,
-          vars: match.vars,
-          model,
-          provider,
-          messages: body.messages,
-          score: match.score,
-          matchedPattern: match.pattern,
-        });
-
-        const payload = openAIResponse({ model, text: out });
-        validatePayload(
-          "response",
-          "openai.chat.completions.response",
-          payload,
-          config.contracts?.mode || "warn"
-        );
-        return res.json(payload);
-      }
-
-      log("match.none", { provider });
-
+  if (step) {
+    if (step.kind === "chat") {
       const payload = openAIResponse({
         model,
-        text:
-          config.defaults?.fallback ||
-          "Sorry, I don't have a mock for that yet.",
+        text: step.reply || "OK",
       });
       validatePayload(
         "response",
@@ -149,94 +83,166 @@ export async function createLlmMockRouter(config) {
       return res.json(payload);
     }
 
-    return applyFaultOrLatency(findCaseOptions(config, text), ctx, res, send);
-  };
-
-  const geminiHandler = async (req, res) => {
-    const body = req.body || {};
-    validatePayload(
-      "request",
-      "gemini.generateContent.request",
-      body,
-      config.contracts?.mode || "warn"
-    );
-
-    const model = req.params.model || body.model || "models/gemini-mock";
-    const provider = "gemini.generateContent";
-
-    const step = await scenarios.nextStep();
-    if (step) {
-      let text;
-      if (step.kind === "chat") {
-        text = step.reply || "OK";
-      } else if (step.kind === "tools") {
-        text = JSON.stringify(step.result);
-      }
-
-      if (text !== undefined) {
-        const payload = geminiResponseShape({ model, text });
-        validatePayload(
-          "response",
-          "gemini.generateContent.response",
-          payload,
-          config.contracts?.mode || "warn"
-        );
-        return res.json(payload);
-      }
+    if (step.kind === "tools") {
+      const toolsText = JSON.stringify(step.result);
+      const payload = openAIResponse({ model, text: toolsText });
+      validatePayload(
+        "response",
+        "openai.chat.completions.response",
+        payload,
+        config.contracts?.mode || "warn"
+      );
+      return res.json(payload);
     }
 
-    const text = extractUserTextFromGemini(body) || "";
+    // unknown step.kind → fall through to normal flow
+  }
 
-    log("req.in", { provider, reqId: req._reqId, model, text });
+  // Normal caseWhen-based mocking
+  log("req.in", { provider, reqId: req._reqId, model, text });
 
-    const ctx = {
-      env: config.env,
-      testTag: config.testTag,
-      provider,
-      model,
-      headers: req.headers,
-      params: req.query,
-      stream: !!body.stream,
-    };
+  const ctx = {
+    env: config.env,
+    testTag: config.testTag,
+    provider,
+    model,
+    headers: req.headers,
+    params: req.query,
+    stream: !!body.stream,
+  };
 
-    async function send() {
-      const match = await routeToCase({ text, config });
-      if (match.chosen) {
-        log("match", {
-          provider,
-          mode: match.mode,
-          pattern: match.pattern,
-          score: match.score,
-          vars: match.vars,
-        });
-
-        const out = await runHandler(match.chosen, {
-          text,
-          vars: match.vars,
-          model,
-          provider,
-          score: match.score,
-          matchedPattern: match.pattern,
-        });
-
-        const payload = geminiResponseShape({ model, text: out });
-        validatePayload(
-          "response",
-          "gemini.generateContent.response",
-          payload,
-          config.contracts?.mode || "warn"
-        );
-        return res.json(payload);
-      }
-
-      log("match.none", { provider });
-
-      const payload = geminiResponseShape({
-        model,
-        text:
-          config.defaults?.fallback ||
-          "Sorry, I don't have a mock for that yet.",
+  async function send() {
+    const match = await routeToCase({ text, config });
+    if (match.chosen) {
+      log("match", {
+        provider,
+        mode: match.mode,
+        pattern: match.pattern,
+        score: match.score,
+        vars: match.vars,
       });
+
+      const out = await runHandler(match.chosen, {
+        text,
+        vars: match.vars,
+        model,
+        provider,
+        messages: body.messages,
+        score: match.score,
+        matchedPattern: match.pattern,
+      });
+
+      const payload = openAIResponse({ model, text: out });
+      validatePayload(
+        "response",
+        "openai.chat.completions.response",
+        payload,
+        config.contracts?.mode || "warn"
+      );
+      return res.json(payload);
+    }
+
+    log("match.none", { provider });
+    const payload = openAIResponse({
+      model,
+      text:
+        config.defaults?.fallback ||
+        "Sorry, I don't have a mock for that yet.",
+    });
+    validatePayload(
+      "response",
+      "openai.chat.completions.response",
+      payload,
+      config.contracts?.mode || "warn"
+    );
+    return res.json(payload);
+  }
+
+  return applyFaultOrLatency(findCaseOptions(config, text), ctx, res, send);
+};
+
+const geminiHandler = async (req, res) => {
+  const body = req.body || {};
+  validatePayload(
+    "request",
+    "gemini.generateContent.request",
+    body,
+    config.contracts?.mode || "warn"
+  );
+
+  const model = req.params.model || body.model || "models/gemini-mock";
+  const provider = "gemini.generateContent";
+
+  // Extract text before scenarios
+  const userText = extractUserTextFromGemini(body) || "";
+  console.log('userText', userText)
+  // SCENARIO HOOK for Gemini
+  const step = await scenarios.nextStep({
+    provider,
+    model,
+    text: userText,
+    headers: req.headers,
+    params: req.query,
+  });
+
+  if (step) {
+    let text;
+    if (step.kind === "chat") {
+      text = step.reply || "OK";
+    } else if (step.kind === "tools") {
+      text = JSON.stringify(step.result);
+    }
+
+    if (text !== undefined) {
+      const payload = geminiResponseShape({ model, text });
+      validatePayload(
+        "response",
+        "gemini.generateContent.response",
+        payload,
+        config.contracts?.mode || "warn"
+      );
+      return res.json(payload);
+    }
+    // unknown step.kind → fall through
+  }
+
+  // 🔹 Normal Gemini caseWhen-based mocking
+  const text = userText;
+
+  log("req.in", { provider, reqId: req._reqId, model, text });
+
+  const ctx = {
+    env: config.env,
+    testTag: config.testTag,
+    provider,
+    model,
+    headers: req.headers,
+    params: req.query,
+    stream: !!body.stream,
+  };
+
+  async function send() {
+    const match = await routeToCase({ text, config });
+    if (match.chosen) {
+      log("match", {
+        provider,
+        mode: match.mode,
+        pattern: match.pattern,
+        score: match.score,
+        vars: match.vars,
+      });
+
+      const out = await runHandler(match.chosen, {
+        text,
+        vars: match.vars,
+        model,
+        provider,
+        messages: body.messages,
+        score: match.score,
+        matchedPattern: match.pattern,
+      });
+
+      const payload = geminiResponseShape({ model, text: out });
       validatePayload(
         "response",
         "gemini.generateContent.response",
@@ -246,8 +252,229 @@ export async function createLlmMockRouter(config) {
       return res.json(payload);
     }
 
-    return applyFaultOrLatency(findCaseOptions(config, text), ctx, res, send);
-  };
+    log("match.none", { provider });
+
+    const payload = geminiResponseShape({
+      model,
+      text:
+        config.defaults?.fallback ||
+        "Sorry, I don't have a mock for that yet.",
+    });
+    validatePayload(
+      "response",
+      "gemini.generateContent.response",
+      payload,
+      config.contracts?.mode || "warn"
+    );
+    return res.json(payload);
+  }
+
+  return applyFaultOrLatency(findCaseOptions(config, text), ctx, res, send);
+};
+
+
+  // const openAIHandler = async (req, res) => {
+  //   const body = req.body || {};
+  //   validatePayload(
+  //     "request",
+  //     "openai.chat.completions.request",
+  //     body,
+  //     config.contracts?.mode || "warn"
+  //   );
+
+  //   const step = await scenarios.nextStep();
+  //   if (step) {
+  //     const model = body.model || "llm-emulator";
+  //     if (step.kind === "chat") {
+  //       const payload = openAIResponse({
+  //         model,
+  //         text: step.reply || "OK",
+  //       });
+  //       validatePayload(
+  //         "response",
+  //         "openai.chat.completions.response",
+  //         payload,
+  //         config.contracts?.mode || "warn"
+  //       );
+  //       return res.json(payload);
+  //     }
+
+  //     if (step.kind === "tools") {
+  //       const text = JSON.stringify(step.result);
+  //       const payload = openAIResponse({ model, text });
+  //       validatePayload(
+  //         "response",
+  //         "openai.chat.completions.response",
+  //         payload,
+  //         config.contracts?.mode || "warn"
+  //       );
+  //       return res.json(payload);
+  //     }
+  //   }
+
+  //   const text = extractUserTextFromOpenAI(body) || "";
+  //   const model = body.model || "llm-emulator";
+  //   const provider = "openai.chat";
+
+  //   log("req.in", { provider, reqId: req._reqId, model, text });
+
+  //   const ctx = {
+  //     env: config.env,
+  //     testTag: config.testTag,
+  //     provider,
+  //     model,
+  //     headers: req.headers,
+  //     params: req.query,
+  //     stream: !!body.stream,
+  //   };
+
+  //   async function send() {
+  //     const match = await routeToCase({ text, config });
+  //     if (match.chosen) {
+  //       log("match", {
+  //         provider,
+  //         mode: match.mode,
+  //         pattern: match.pattern,
+  //         score: match.score,
+  //         vars: match.vars,
+  //       });
+
+  //       const out = await runHandler(match.chosen, {
+  //         text,
+  //         vars: match.vars,
+  //         model,
+  //         provider,
+  //         messages: body.messages,
+  //         score: match.score,
+  //         matchedPattern: match.pattern,
+  //       });
+
+  //       const payload = openAIResponse({ model, text: out });
+  //       validatePayload(
+  //         "response",
+  //         "openai.chat.completions.response",
+  //         payload,
+  //         config.contracts?.mode || "warn"
+  //       );
+  //       return res.json(payload);
+  //     }
+
+  //     log("match.none", { provider });
+
+  //     const payload = openAIResponse({
+  //       model,
+  //       text:
+  //         config.defaults?.fallback ||
+  //         "Sorry, I don't have a mock for that yet.",
+  //     });
+  //     validatePayload(
+  //       "response",
+  //       "openai.chat.completions.response",
+  //       payload,
+  //       config.contracts?.mode || "warn"
+  //     );
+  //     return res.json(payload);
+  //   }
+
+  //   return applyFaultOrLatency(findCaseOptions(config, text), ctx, res, send);
+  // };
+
+  // const geminiHandler = async (req, res) => {
+  //   const body = req.body || {};
+  //   validatePayload(
+  //     "request",
+  //     "gemini.generateContent.request",
+  //     body,
+  //     config.contracts?.mode || "warn"
+  //   );
+
+  //   const model = req.params.model || body.model || "models/gemini-mock";
+  //   const provider = "gemini.generateContent";
+
+  //   const step = await scenarios.nextStep();
+  //   if (step) {
+  //     let text;
+  //     if (step.kind === "chat") {
+  //       text = step.reply || "OK";
+  //     } else if (step.kind === "tools") {
+  //       text = JSON.stringify(step.result);
+  //     }
+
+  //     if (text !== undefined) {
+  //       const payload = geminiResponseShape({ model, text });
+  //       validatePayload(
+  //         "response",
+  //         "gemini.generateContent.response",
+  //         payload,
+  //         config.contracts?.mode || "warn"
+  //       );
+  //       return res.json(payload);
+  //     }
+  //   }
+
+  //   const text = extractUserTextFromGemini(body) || "";
+
+  //   log("req.in", { provider, reqId: req._reqId, model, text });
+
+  //   const ctx = {
+  //     env: config.env,
+  //     testTag: config.testTag,
+  //     provider,
+  //     model,
+  //     headers: req.headers,
+  //     params: req.query,
+  //     stream: !!body.stream,
+  //   };
+
+  //   async function send() {
+  //     const match = await routeToCase({ text, config });
+  //     if (match.chosen) {
+  //       log("match", {
+  //         provider,
+  //         mode: match.mode,
+  //         pattern: match.pattern,
+  //         score: match.score,
+  //         vars: match.vars,
+  //       });
+
+  //       const out = await runHandler(match.chosen, {
+  //         text,
+  //         vars: match.vars,
+  //         model,
+  //         provider,
+  //         score: match.score,
+  //         matchedPattern: match.pattern,
+  //       });
+
+  //       const payload = geminiResponseShape({ model, text: out });
+  //       validatePayload(
+  //         "response",
+  //         "gemini.generateContent.response",
+  //         payload,
+  //         config.contracts?.mode || "warn"
+  //       );
+  //       return res.json(payload);
+  //     }
+
+  //     log("match.none", { provider });
+
+  //     const payload = geminiResponseShape({
+  //       model,
+  //       text:
+  //         config.defaults?.fallback ||
+  //         "Sorry, I don't have a mock for that yet.",
+  //     });
+  //     validatePayload(
+  //       "response",
+  //       "gemini.generateContent.response",
+  //       payload,
+  //       config.contracts?.mode || "warn"
+  //     );
+  //     return res.json(payload);
+  //   }
+
+  //   return applyFaultOrLatency(findCaseOptions(config, text), ctx, res, send);
+  // };
 
   router.post("/v1/chat/completions", openAIHandler);
   router.post("/chat/completions", openAIHandler);
